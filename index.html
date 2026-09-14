@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>ChainTrace — Transaction Constellations</title>
+
+    <meta
+        name="description"
+        content="Explore Ethereum wallet transactions as an interactive data constellation."
+    >
+    <meta name="theme-color" content="#07090d">
+    <meta name="color-scheme" content="dark">
+
+    <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./assets/css/app.css">
+
+    <script
+        defer
+        src="https://code.jquery.com/jquery-3.7.1.min.js"
+        integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
+        crossorigin="anonymous"
+    ></script>
+
+    <script
+        defer
+        src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"
+    ></script>
+
+    <script defer src="./assets/js/config.js"></script>
+    <script defer src="./assets/js/cache.js"></script>
+    <script defer src="./assets/js/api.js"></script>
+    <script defer src="./assets/js/graph.js"></script>
+    <script defer src="./assets/js/particles.js"></script>
+    <script defer src="./assets/js/app.js"></script>
+</head>
+
+<body data-view="landing">
+    <canvas
+        id="ambient-canvas"
+        class="ambient-canvas"
+        aria-hidden="true"
+    ></canvas>
+
+    <div id="app" class="app-shell">
+        <header id="site-header" class="site-header">
+            <a class="brand" href="./" aria-label="ChainTrace home">
+                <span class="brand-symbol" aria-hidden="true">
+                    <i></i>
+                    <i></i>
+                    <i></i>
+                </span>
+
+                <span>ChainTrace</span>
+            </a>
+
+            <div class="network-status">
+                <span class="network-pulse"></span>
+                ETHEREUM MAINNET
+            </div>
+        </header>
+
+        <main>
+            <section
+                id="landing-view"
+                class="landing-view"
+                aria-labelledby="landing-title"
+            >
+                <div class="landing-content">
+                    <p class="system-label">
+                        ON-CHAIN INTELLIGENCE
+                    </p>
+
+                    <h1 id="landing-title">
+                        Trace value.
+                        <span>Enter the data space.</span>
+                    </h1>
+
+                    <p class="landing-description">
+                        Transform the latest wallet activity into an
+                        explorable constellation of transactions.
+                    </p>
+
+                    <form
+                        id="wallet-form"
+                        class="wallet-form"
+                        novalidate
+                    >
+                        <label
+                            class="sr-only"
+                            for="wallet-address"
+                        >
+                            Ethereum wallet address
+                        </label>
+
+                        <div class="address-field">
+                            <svg
+                                viewBox="0 0 24 24"
+                                aria-hidden="true"
+                            >
+                                <circle
+                                    cx="11"
+                                    cy="11"
+                                    r="6.5"
+                                ></circle>
+
+                                <path d="m16 16 4 4"></path>
+                            </svg>
+
+                            <input
+                                id="wallet-address"
+                                name="address"
+                                type="text"
+                                maxlength="42"
+                                autocomplete="off"
+                                autocapitalize="off"
+                                spellcheck="false"
+                                placeholder="Enter an Ethereum address"
+                            >
+
+                            <button
+                                id="clear-address"
+                                class="clear-address"
+                                type="button"
+                                aria-label="Clear address"
+                                hidden
+                            >
+                                ×
+                            </button>
+                        </div>
+
+                        <button
+                            id="analyze-button"
+                            class="analyze-button"
+                            type="submit"
+                        >
+                            ANALYZE
+                            <span aria-hidden="true">→</span>
+                        </button>
+                    </form>
+
+                    <div class="landing-meta">
+                        <span>
+                            READ-ONLY · NO WALLET CONNECTION
+                        </span>
+
+                        <button
+                            id="demo-button"
+                            class="demo-button"
+                            type="button"
+                        >
+                            LOAD DEMO ADDRESS
+                        </button>
+                    </div>
+
+                    <p
+                        id="address-error"
+                        class="address-error"
+                        role="alert"
+                        hidden
+                    ></p>
+                </div>
+            </section>
+
+            <section
+                id="flight-view"
+                class="flight-view"
+                aria-live="polite"
+                hidden
+            >
+                <div class="flight-reticle" aria-hidden="true">
+                    <span class="reticle-horizontal"></span>
+                    <span class="reticle-vertical"></span>
+                    <span class="reticle-core"></span>
+                </div>
+
+                <div class="flight-copy">
+                    <span id="sector-code" class="sector-code">
+                        LOCATING DATA SECTOR
+                    </span>
+
+                    <strong id="flight-title">
+                        Mapping transaction field
+                    </strong>
+
+                    <span id="flight-status">
+                        Connecting to Ethereum…
+                    </span>
+                </div>
+
+                <div class="flight-progress" aria-hidden="true">
+                    <span id="flight-progress-bar"></span>
+                </div>
+            </section>
+
+            <section
+                id="universe-view"
+                class="universe-view"
+                aria-label="Wallet transaction constellation"
+                hidden
+            >
+                <div
+                    id="transaction-space"
+                    class="transaction-space"
+                    role="img"
+                    aria-label="Interactive transaction constellation"
+                ></div>
+
+                <div
+                    class="space-grid"
+                    aria-hidden="true"
+                ></div>
+
+                <header class="space-header hud-window">
+                    <button
+                        id="back-button"
+                        class="hud-button back-button"
+                        type="button"
+                        aria-label="Return to address search"
+                    >
+                        ←
+                    </button>
+
+                    <div class="wallet-coordinate">
+                        <span>OBSERVED WALLET</span>
+
+                        <strong id="wallet-short-address">
+                            0x0000…0000
+                        </strong>
+                    </div>
+
+                    <div class="space-header-meta">
+                        <span id="data-source">
+                            BLOCKSCOUT / LIVE
+                        </span>
+
+                        <span id="data-age">
+                            JUST NOW
+                        </span>
+
+                        <a
+                            id="wallet-explorer-link"
+                            href="#"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            EXPLORER ↗
+                        </a>
+                    </div>
+                </header>
+
+                <section
+                    class="metric-rail"
+                    aria-label="Wallet metrics"
+                >
+                    <article class="metric-cell">
+                        <span>BALANCE</span>
+                        <strong id="metric-balance">—</strong>
+                    </article>
+
+                    <article class="metric-cell metric-incoming">
+                        <span>RECEIVED</span>
+                        <strong id="metric-received">—</strong>
+                    </article>
+
+                    <article class="metric-cell metric-outgoing">
+                        <span>SENT</span>
+                        <strong id="metric-sent">—</strong>
+                    </article>
+
+                    <article class="metric-cell">
+                        <span>GAS SPENT</span>
+                        <strong id="metric-gas">—</strong>
+                    </article>
+
+                    <article class="metric-cell">
+                        <span>CONNECTIONS</span>
+                        <strong id="metric-counterparties">—</strong>
+                    </article>
+
+                    <article class="metric-cell">
+                        <span>TRANSACTIONS</span>
+                        <strong id="metric-transactions">—</strong>
+                    </article>
+                </section>
+
+                <nav
+                    id="graph-filters"
+                    class="graph-filters hud-window"
+                    aria-label="Filter transaction stars"
+                >
+                    <button
+                        class="graph-filter is-active"
+                        type="button"
+                        data-filter="all"
+                        aria-pressed="true"
+                    >
+                        ALL
+                    </button>
+
+                    <button
+                        class="graph-filter"
+                        type="button"
+                        data-filter="in"
+                        aria-pressed="false"
+                    >
+                        IN
+                    </button>
+
+                    <button
+                        class="graph-filter"
+                        type="button"
+                        data-filter="out"
+                        aria-pressed="false"
+                    >
+                        OUT
+                    </button>
+
+                    <button
+                        class="graph-filter"
+                        type="button"
+                        data-filter="contract"
+                        aria-pressed="false"
+                    >
+                        CONTRACTS
+                    </button>
+
+                    <button
+                        class="graph-filter"
+                        type="button"
+                        data-filter="failed"
+                        aria-pressed="false"
+                    >
+                        FAILED
+                    </button>
+                </nav>
+
+                <button
+                    id="recenter-graph"
+                    class="recenter-button hud-button"
+                    type="button"
+                    aria-label="Recenter constellation"
+                    title="Recenter constellation"
+                >
+                    ◎
+                </button>
+
+                <aside class="field-hud hud-window">
+                    <header class="hud-header">
+                        <span>FIELD ANALYSIS</span>
+                        <strong id="field-sector">SECTOR —</strong>
+                    </header>
+
+                    <dl class="field-statistics">
+                        <div>
+                            <dt>TRANSACTION STARS</dt>
+                            <dd id="field-stars">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>COUNTERPARTY CLUSTERS</dt>
+                            <dd id="field-clusters">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>CONTRACT CALLS</dt>
+                            <dd id="field-contracts">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>FAILED</dt>
+                            <dd id="field-failed">—</dd>
+                        </div>
+                    </dl>
+
+                    <div
+                        id="direction-chart"
+                        class="direction-chart"
+                        aria-label="Transaction direction distribution"
+                    ></div>
+                </aside>
+
+                <section class="activity-hud hud-window">
+                    <header class="hud-header">
+                        <span>ACTIVITY SIGNAL</span>
+
+                        <div class="period-filter">
+                            <button
+                                type="button"
+                                data-period="7"
+                            >
+                                7D
+                            </button>
+
+                            <button
+                                type="button"
+                                data-period="30"
+                            >
+                                30D
+                            </button>
+
+                            <button
+                                class="is-active"
+                                type="button"
+                                data-period="all"
+                            >
+                                ALL
+                            </button>
+                        </div>
+                    </header>
+
+                    <div
+                        id="activity-chart"
+                        class="activity-chart"
+                        aria-label="Wallet activity timeline"
+                    ></div>
+                </section>
+
+                <aside class="stream-hud hud-window">
+                    <header class="hud-header">
+                        <span>LATEST SIGNALS</span>
+                        <strong>LIVE DATA</strong>
+                    </header>
+
+                    <ol
+                        id="transaction-stream"
+                        class="transaction-stream"
+                    ></ol>
+                </aside>
+
+                <aside
+                    id="transaction-inspector"
+                    class="transaction-inspector hud-window"
+                    hidden
+                >
+                    <header class="inspector-header">
+                        <div>
+                            <span>SELECTED STAR</span>
+                            <strong id="inspector-direction">
+                                TRANSACTION
+                            </strong>
+                        </div>
+
+                        <button
+                            id="close-inspector"
+                            class="hud-button"
+                            type="button"
+                            aria-label="Close transaction details"
+                        >
+                            ×
+                        </button>
+                    </header>
+
+                    <div class="inspector-value">
+                        <span>VALUE</span>
+                        <strong id="inspector-value">—</strong>
+                    </div>
+
+                    <dl class="inspector-data">
+                        <div>
+                            <dt>STATUS</dt>
+                            <dd id="inspector-status">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>METHOD</dt>
+                            <dd id="inspector-method">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>FROM</dt>
+                            <dd id="inspector-from">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>TO</dt>
+                            <dd id="inspector-to">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>GAS FEE</dt>
+                            <dd id="inspector-fee">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>BLOCK</dt>
+                            <dd id="inspector-block">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>TIME</dt>
+                            <dd id="inspector-time">—</dd>
+                        </div>
+
+                        <div>
+                            <dt>HASH</dt>
+                            <dd id="inspector-hash">—</dd>
+                        </div>
+                    </dl>
+
+                    <a
+                        id="transaction-explorer-link"
+                        class="inspector-link"
+                        href="#"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        OPEN TRANSACTION ↗
+                    </a>
+                </aside>
+
+                <div class="space-legend hud-window">
+                    <span>
+                        <i class="legend-core"></i>
+                        WALLET
+                    </span>
+
+                    <span>
+                        <i class="legend-in"></i>
+                        IN
+                    </span>
+
+                    <span>
+                        <i class="legend-out"></i>
+                        OUT
+                    </span>
+
+                    <span>
+                        <i class="legend-contract"></i>
+                        CONTRACT
+                    </span>
+                </div>
+
+                <p class="space-help">
+                    DRAG TO MOVE · SCROLL TO ZOOM · SELECT A STAR
+                </p>
+            </section>
+
+            <section
+                id="error-view"
+                class="error-view hud-window"
+                role="alert"
+                hidden
+            >
+                <span>CONNECTION ERROR</span>
+
+                <strong id="error-title">
+                    Unable to enter this data sector
+                </strong>
+
+                <p id="error-message">
+                    The wallet could not be loaded.
+                </p>
+
+                <div>
+                    <button
+                        id="retry-button"
+                        type="button"
+                    >
+                        RETRY
+                    </button>
+
+                    <button
+                        id="error-demo-button"
+                        type="button"
+                    >
+                        LOAD DEMO
+                    </button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div
+        id="toast"
+        class="toast hud-window"
+        role="status"
+        aria-live="polite"
+        hidden
+    >
+        <span id="toast-message"></span>
+    </div>
+
+    <noscript>
+        <div class="noscript-message">
+            ChainTrace requires JavaScript.
+        </div>
+    </noscript>
+</body>
+</html>
