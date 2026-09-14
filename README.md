@@ -98,7 +98,7 @@ The entire project runs directly in the browser and requires no wallet connectio
 Docker is the easiest way to run ChainTrace with a proper HTTP origin.
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_LOGIN/chaintrace.git
+git clone https://github.com/demon-cheg/chaintrace.git
 cd chaintrace
 
 docker run --rm --name chaintrace-preview `
