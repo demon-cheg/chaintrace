@@ -29,6 +29,20 @@
         neutral: "#71809b"
     };
 
+    const STELLAR = Object.freeze({
+        minSize: 4,
+        maxSize: 80,
+        tabletMaxSize: 68,
+        mobileMaxSize: 56,
+
+        dustMaxSize: 7,
+        starMaxSize: 18,
+        giantMaxSize: 36,
+        pulsarMaxSize: 58,
+
+        collisionPadding: 11
+    });
+
     const state = {
         analysis: null,
         model: null,
@@ -41,6 +55,10 @@
         activityChart: null,
 
         transactionByHash: new Map(),
+        stellarByTransaction: new WeakMap(),
+        nodeIndexByHash: new Map(),
+        animatedElements: [],
+        responsiveMaxSize: null,
         selectionHandler: null
     };
 
@@ -288,6 +306,12 @@
             counterpartyCount: 0
         };
 
+        state.stellarByTransaction =
+            buildStellarProfiles(
+                analysis.transactions
+            );
+
+        state.nodeIndexByHash.clear();
         state.transactionByHash.clear();
 
         analysis.transactions.forEach(
@@ -459,359 +483,1439 @@
         return COLORS.core;
     }
 
-    function getStarSize(transaction) {
-        const value = weiToEth(
-            transaction.valueWei
-        );
+    function getMaximumRenderedStarSize() {
+        if (window.innerWidth <= 680) {
+            return STELLAR.mobileMaxSize;
+        }
+    
+        if (window.innerWidth <= 1180) {
+            return STELLAR.tabletMaxSize;
+        }
+    
+        return STELLAR.maxSize;
+    }
 
-        const valueScale =
-            Math.log10(value + 1) * 4.1;
+    function getStellarClass(canonicalSize) {
+        if (canonicalSize <= STELLAR.dustMaxSize) {
+            return "dust";
+        }
+    
+        if (canonicalSize <= STELLAR.starMaxSize) {
+            return "star";
+        }
+    
+        if (canonicalSize <= STELLAR.giantMaxSize) {
+            return "giant";
+        }
+    
+        if (canonicalSize <= STELLAR.pulsarMaxSize) {
+            return "pulsar";
+        }
+    
+        return "singularity";
+    }
 
-        const contractScale =
-            transaction.isContractInteraction
-                ? 1.8
-                : 0;
+    function getStellarLabel(stellarClass) {
+        return {
+            dust: "COSMIC DUST",
+            star: "VALUE STAR",
+            giant: "GIANT",
+            pulsar: "PULSAR",
+            singularity: "SINGULARITY"
+        }[stellarClass] || "VALUE STAR";
+    }
 
+    function getPercentile(sortedValues, value) {
+        if (sortedValues.length <= 1) {
+            return value > 0 ? 0.5 : 0;
+        }
+    
+        let low = 0;
+        let high = sortedValues.length;
+    
+        while (low < high) {
+            const middle = Math.floor((low + high) / 2);
+    
+            if (sortedValues[middle] <= value) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+    
         return clamp(
-            5.5 + valueScale + contractScale,
-            5.5,
-            18
+            (low - 1) / (sortedValues.length - 1),
+            0,
+            1
         );
+    }
+
+    function buildStellarProfiles(transactions) {
+        const profiles = new WeakMap();
+    
+        const entries = transactions.map(
+            (transaction) => ({
+                transaction,
+                valueEth: Math.max(
+                    0,
+                    weiToEth(transaction.valueWei)
+                )
+            })
+        );
+    
+        const sortedValues = entries
+            .map((entry) => entry.valueEth)
+            .sort((first, second) => first - second);
+    
+        const positiveValues = sortedValues.filter(
+            (value) => value > 0
+        );
+    
+        const minimumPositive = positiveValues[0] || 0;
+    
+        const maximumPositive =
+            positiveValues[positiveValues.length - 1] || 0;
+    
+        const minimumLog =
+            minimumPositive > 0
+                ? Math.log10(minimumPositive)
+                : 0;
+    
+        const maximumLog =
+            maximumPositive > 0
+                ? Math.log10(maximumPositive)
+                : minimumLog;
+    
+        const logSpan = maximumLog - minimumLog;
+    
+        entries.forEach((entry) => {
+            const percentile = getPercentile(
+                sortedValues,
+                entry.valueEth
+            );
+    
+            let intensity = 0;
+    
+            if (entry.valueEth > 0) {
+                if (logSpan < 0.000001) {
+                    intensity = 0.23;
+                } else {
+                    const logarithmicPosition = clamp(
+                        (
+                            Math.log10(entry.valueEth) -
+                            minimumLog
+                        ) / logSpan,
+                        0,
+                        1
+                    );
+    
+                    /*
+                     * Real value ratio is dominant. Percentile only
+                     * separates dense groups of similar transfers.
+                     */
+                    intensity = clamp(
+                        logarithmicPosition * 0.84 +
+                            percentile * 0.16,
+                        0,
+                        1
+                    );
+                }
+            }
+    
+            let canonicalSize =
+                STELLAR.minSize +
+                (
+                    STELLAR.maxSize -
+                    STELLAR.minSize
+                ) * Math.pow(intensity, 1.48);
+    
+            if (
+                logSpan >= 0.000001 &&
+                entry.valueEth === maximumPositive
+            ) {
+                intensity = 1;
+                canonicalSize = STELLAR.maxSize;
+            }
+    
+            canonicalSize = clamp(
+                canonicalSize,
+                STELLAR.minSize,
+                STELLAR.maxSize
+            );
+    
+            const stellarClass =
+                getStellarClass(canonicalSize);
+    
+            profiles.set(entry.transaction, {
+                valueEth: entry.valueEth,
+                percentile,
+                intensity,
+                canonicalSize,
+                stellarClass,
+                label: getStellarLabel(stellarClass)
+            });
+        });
+    
+        return profiles;
+    }
+
+    function getStellarProfile(transaction) {
+        return (
+            state.stellarByTransaction.get(transaction) || {
+                valueEth: weiToEth(transaction.valueWei),
+                percentile: 0,
+                intensity: 0,
+                canonicalSize: STELLAR.minSize,
+                stellarClass: "dust",
+                label: getStellarLabel("dust")
+            }
+        );
+    }
+
+    function getRenderedStarSize(profile) {
+        const maximum =
+            getMaximumRenderedStarSize();
+    
+        const normalized = clamp(
+            (
+                profile.canonicalSize -
+                STELLAR.minSize
+            ) /
+            (
+                STELLAR.maxSize -
+                STELLAR.minSize
+            ),
+            0,
+            1
+        );
+    
+        return (
+            STELLAR.minSize +
+            normalized *
+                (maximum - STELLAR.minSize)
+        );
+    }
+
+    function colorWithAlpha(hexColor, alpha) {
+        const normalized = String(hexColor)
+            .replace("#", "")
+            .trim();
+    
+        if (normalized.length !== 6) {
+            return hexColor;
+        }
+    
+        const red = parseInt(normalized.slice(0, 2), 16);
+        const green = parseInt(normalized.slice(2, 4), 16);
+        const blue = parseInt(normalized.slice(4, 6), 16);
+    
+        return `rgba(${red},${green},${blue},${alpha})`;
+    }
+
+    function radialGradient(stops) {
+        return new echarts.graphic.RadialGradient(
+            0.5,
+            0.5,
+            0.72,
+            stops,
+            false
+        );
+    }
+
+    function getStellarVisual(transaction) {
+        const profile =
+            getStellarProfile(transaction);
+    
+        const size =
+            getRenderedStarSize(profile);
+    
+        const semanticColor =
+            getTransactionColor(transaction);
+    
+        let accent = semanticColor;
+        let core = "#ffffff";
+    
+        if (profile.stellarClass === "dust") {
+            accent = "#7885a8";
+            core = "#dce3ff";
+        }
+    
+        if (profile.stellarClass === "giant") {
+            accent =
+                transaction.isContractInteraction
+                    ? "#ffd18a"
+                    : "#8ee9ff";
+        }
+    
+        if (profile.stellarClass === "pulsar") {
+            accent =
+                transaction.direction === "out"
+                    ? "#c8a5ff"
+                    : "#73efff";
+    
+            core = "#fff7d6";
+        }
+    
+        if (profile.stellarClass === "singularity") {
+            accent =
+                transaction.isContractInteraction
+                    ? "#ffca78"
+                    : (
+                        transaction.direction === "in"
+                            ? "#68f0cc"
+                            : "#b786ff"
+                    );
+    
+            core = "#02030a";
+        }
+    
+        if (transaction.status === "failed") {
+            accent = COLORS.failed;
+            core = "#fff0f1";
+        }
+    
+        let fill;
+    
+        if (profile.stellarClass === "singularity") {
+            fill = radialGradient([
+                {offset: 0, color: "#010207"},
+                {offset: 0.3, color: core},
+                {offset: 0.42, color: accent},
+                {offset: 0.49, color: "#fff9e9"},
+                {offset: 0.58, color: accent},
+                {
+                    offset: 0.76,
+                    color: colorWithAlpha(accent, 0.42)
+                },
+                {offset: 1, color: "#050712"}
+            ]);
+        } else {
+            fill = radialGradient([
+                {offset: 0, color: core},
+                {offset: 0.2, color: "#ffffff"},
+                {offset: 0.48, color: accent},
+                {
+                    offset: 0.78,
+                    color: colorWithAlpha(accent, 0.72)
+                },
+                {
+                    offset: 1,
+                    color: colorWithAlpha(accent, 0.16)
+                }
+            ]);
+        }
+    
+        const shadowBlur = clamp(
+            2 +
+                Math.pow(profile.intensity, 1.12) *
+                    68,
+            2,
+            70
+        );
+    
+        return {
+            profile,
+            size,
+            accent,
+            semanticColor,
+            fill,
+    
+            symbol:
+                profile.stellarClass === "singularity"
+                    ? "circle"
+                    : STAR_SYMBOL,
+    
+            shadowBlur,
+    
+            borderWidth: clamp(
+                0.35 + profile.intensity * 2.4,
+                0.35,
+                2.75
+            ),
+    
+            linkWidth: clamp(
+                0.35 +
+                    Math.pow(profile.intensity, 1.35) *
+                        4.7,
+                0.35,
+                5.05
+            ),
+    
+            linkOpacity: clamp(
+                0.2 +
+                    Math.sqrt(profile.intensity) *
+                        0.62,
+                0.2,
+                0.82
+            )
+        };
+    }
+
+    function createHaloNodes(starNode, visual) {
+        const stellarClass =
+            visual.profile.stellarClass;
+    
+        if (
+            stellarClass !== "giant" &&
+            stellarClass !== "pulsar" &&
+            stellarClass !== "singularity"
+        ) {
+            return [];
+        }
+    
+        const outerScale =
+            stellarClass === "singularity"
+                ? 2.15
+                : (
+                    stellarClass === "pulsar"
+                        ? 1.82
+                        : 1.48
+                );
+    
+        const base = {
+            name: "",
+            nodeType: "halo",
+            transactionHash:
+                starNode.transactionHash,
+            stellarClass,
+    
+            x: starNode.x,
+            y: starNode.y,
+    
+            fixed: true,
+            draggable: false,
+            cursor: "default",
+    
+            symbol: "circle",
+    
+            label: {
+                show: false
+            },
+    
+            tooltip: {
+                show: false
+            },
+    
+            emphasis: {
+                disabled: true,
+                label: {
+                    show: false
+                }
+            }
+        };
+    
+        const halos = [
+            {
+                ...base,
+    
+                id:
+                    `halo:outer:${starNode.transactionHash}`,
+    
+                haloRole: "outer",
+    
+                symbolSize:
+                    visual.size * outerScale,
+    
+                itemStyle: {
+                    color: radialGradient([
+                        {
+                            offset: 0,
+                            color: "rgba(0,0,0,0)"
+                        },
+                        {
+                            offset: 0.48,
+                            color: colorWithAlpha(
+                                visual.accent,
+                                0.05
+                            )
+                        },
+                        {
+                            offset: 0.64,
+                            color: colorWithAlpha(
+                                visual.accent,
+                                stellarClass ===
+                                "singularity"
+                                    ? 0.48
+                                    : 0.3
+                            )
+                        },
+                        {
+                            offset: 0.72,
+                            color:
+                                "rgba(255,255,255,.12)"
+                        },
+                        {
+                            offset: 0.84,
+                            color: colorWithAlpha(
+                                visual.accent,
+                                0.055
+                            )
+                        },
+                        {
+                            offset: 1,
+                            color: "rgba(0,0,0,0)"
+                        }
+                    ]),
+    
+                    shadowBlur:
+                        stellarClass ===
+                        "singularity"
+                            ? 34
+                            : 18,
+    
+                    shadowColor:
+                        colorWithAlpha(
+                            visual.accent,
+                            0.58
+                        )
+                },
+    
+                animationDelay:
+                    hashCode(
+                        starNode.transactionHash ||
+                        starNode.id
+                    ) % 700
+            }
+        ];
+    
+        if (stellarClass === "singularity") {
+            halos.push({
+                ...base,
+    
+                id:
+                    `halo:inner:${starNode.transactionHash}`,
+    
+                haloRole: "inner",
+    
+                symbolSize:
+                    visual.size * 1.42,
+    
+                itemStyle: {
+                    color: radialGradient([
+                        {
+                            offset: 0,
+                            color: "rgba(0,0,0,0)"
+                        },
+                        {
+                            offset: 0.48,
+                            color: "rgba(0,0,0,0)"
+                        },
+                        {
+                            offset: 0.55,
+                            color: "#fff8df"
+                        },
+                        {
+                            offset: 0.61,
+                            color: colorWithAlpha(
+                                visual.accent,
+                                0.92
+                            )
+                        },
+                        {
+                            offset: 0.72,
+                            color: colorWithAlpha(
+                                visual.accent,
+                                0.06
+                            )
+                        },
+                        {
+                            offset: 1,
+                            color: "rgba(0,0,0,0)"
+                        }
+                    ]),
+    
+                    shadowBlur: 24,
+                    shadowColor:
+                        colorWithAlpha(
+                            visual.accent,
+                            0.8
+                        )
+                },
+    
+                animationDelay:
+                    (
+                        hashCode(
+                            starNode.transactionHash ||
+                            starNode.id
+                        ) % 700
+                    ) + 240
+            });
+        }
+    
+        return halos;
+    }
+
+    function layoutGroupTransactions(
+        groupX,
+        groupY,
+        transactions,
+        hasCluster,
+        groupSeed
+    ) {
+        const goldenAngle =
+            Math.PI * (3 - Math.sqrt(5));
+    
+        const placed = [];
+    
+        return transactions.map(
+            (transaction, index) => {
+                const visual =
+                    getStellarVisual(transaction);
+    
+                if (
+                    !hasCluster &&
+                    transactions.length === 1
+                ) {
+                    const position = {
+                        transaction,
+                        visual,
+                        x: groupX,
+                        y: groupY
+                    };
+    
+                    placed.push(position);
+                    return position;
+                }
+    
+                const seed = hashCode(
+                    transaction.hash ||
+                    `${groupSeed}-${index}`
+                );
+    
+                let angle =
+                    index * goldenAngle +
+                    (seed % 360) *
+                        Math.PI /
+                        180;
+    
+                let radius =
+                    46 +
+                    visual.size * 0.76 +
+                    Math.sqrt(index + 1) * 31 +
+                    seed % 19;
+    
+                let x = groupX;
+                let y = groupY;
+    
+                for (
+                    let attempt = 0;
+                    attempt < 64;
+                    attempt += 1
+                ) {
+                    x =
+                        groupX +
+                        Math.cos(angle) * radius;
+    
+                    y =
+                        groupY +
+                        Math.sin(angle) *
+                            radius *
+                            0.76;
+    
+                    const hasCollision =
+                        placed.some((other) => {
+                            const required =
+                                (
+                                    visual.size +
+                                    other.visual.size
+                                ) *
+                                    0.82 +
+                                13;
+    
+                            return (
+                                Math.hypot(
+                                    x - other.x,
+                                    y - other.y
+                                ) < required
+                            );
+                        });
+    
+                    if (!hasCollision) {
+                        break;
+                    }
+    
+                    angle += goldenAngle * 0.37;
+                    radius += 5.5 + attempt * 0.18;
+                }
+    
+                const position = {
+                    transaction,
+                    visual,
+                    x,
+                    y
+                };
+    
+                placed.push(position);
+                return position;
+            }
+        );
+    }
+
+    function resolveNodeCollisions(nodes) {
+        const collisionNodes = nodes.filter(
+            (node) =>
+                node.nodeType === "transaction" ||
+                node.nodeType === "counterparty"
+        );
+    
+        for (
+            let iteration = 0;
+            iteration < 34;
+            iteration += 1
+        ) {
+            for (
+                let firstIndex = 0;
+                firstIndex < collisionNodes.length;
+                firstIndex += 1
+            ) {
+                const first =
+                    collisionNodes[firstIndex];
+    
+                for (
+                    let secondIndex = firstIndex + 1;
+                    secondIndex < collisionNodes.length;
+                    secondIndex += 1
+                ) {
+                    const second =
+                        collisionNodes[secondIndex];
+    
+                    let deltaX = second.x - first.x;
+                    let deltaY = second.y - first.y;
+    
+                    let distance =
+                        Math.hypot(deltaX, deltaY);
+    
+                    const minimumDistance =
+                        (
+                            first.collisionRadius +
+                            second.collisionRadius
+                        ) *
+                            1.58 +
+                        STELLAR.collisionPadding;
+    
+                    if (distance >= minimumDistance) {
+                        continue;
+                    }
+    
+                    if (distance < 0.001) {
+                        const fallbackAngle =
+                            (
+                                hashCode(
+                                    first.id + second.id
+                                ) % 360
+                            ) *
+                            Math.PI /
+                            180;
+    
+                        deltaX = Math.cos(fallbackAngle);
+                        deltaY = Math.sin(fallbackAngle);
+                        distance = 1;
+                    }
+    
+                    const overlap =
+                        minimumDistance - distance;
+    
+                    const normalX = deltaX / distance;
+                    const normalY = deltaY / distance;
+    
+                    const firstMobility =
+                        first.nodeType ===
+                        "counterparty"
+                            ? 0.24
+                            : 0.5;
+    
+                    const secondMobility =
+                        second.nodeType ===
+                        "counterparty"
+                            ? 0.24
+                            : 0.5;
+    
+                    first.x -=
+                        normalX *
+                        overlap *
+                        firstMobility;
+    
+                    first.y -=
+                        normalY *
+                        overlap *
+                        firstMobility;
+    
+                    second.x +=
+                        normalX *
+                        overlap *
+                        secondMobility;
+    
+                    second.y +=
+                        normalY *
+                        overlap *
+                        secondMobility;
+                }
+            }
+    
+            collisionNodes.forEach((node) => {
+                node.x +=
+                    (node.anchorX - node.x) *
+                    0.018;
+    
+                node.y +=
+                    (node.anchorY - node.y) *
+                    0.018;
+            });
+        }
+    }
+
+    function stopStellarAnimations() {
+        state.animatedElements.forEach(
+            (element) => {
+                element?.stopAnimation?.();
+            }
+        );
+    
+        state.animatedElements.length = 0;
+    }
+
+    function startStellarAnimations(graphData) {
+        stopStellarAnimations();
+    
+        if (
+            window.matchMedia(
+                "(prefers-reduced-motion: reduce)"
+            ).matches
+        ) {
+            return;
+        }
+    
+        window.requestAnimationFrame(() => {
+            if (!state.graphChart) {
+                return;
+            }
+    
+            const seriesModel =
+                state.graphChart
+                    .getModel()
+                    ?.getSeriesByIndex(0);
+    
+            const seriesData =
+                seriesModel?.getData();
+    
+            if (!seriesData) {
+                return;
+            }
+    
+            graphData.nodes.forEach(
+                (node, dataIndex) => {
+                    if (node.nodeType !== "halo") {
+                        return;
+                    }
+    
+                    const element =
+                        seriesData.getItemGraphicEl(
+                            dataIndex
+                        );
+    
+                    if (
+                        !element ||
+                        typeof element.animate !==
+                            "function"
+                    ) {
+                        return;
+                    }
+    
+                    const amplitude =
+                        node.stellarClass ===
+                        "singularity"
+                            ? 0.105
+                            : (
+                                node.stellarClass ===
+                                "pulsar"
+                                    ? 0.14
+                                    : 0.07
+                            );
+    
+                    const duration =
+                        node.stellarClass ===
+                        "singularity"
+                            ? 2600
+                            : (
+                                node.stellarClass ===
+                                "pulsar"
+                                    ? 1550
+                                    : 2300
+                            );
+    
+                    element.stopAnimation?.();
+    
+                    const animator =
+                        element.animate("", true);
+    
+                    animator
+                        .when(0, {
+                            scaleX: 1 - amplitude,
+                            scaleY: 1 - amplitude
+                        })
+                        .when(
+                            duration / 2,
+                            {
+                                scaleX:
+                                    1 + amplitude,
+                                scaleY:
+                                    1 + amplitude
+                            }
+                        )
+                        .when(duration, {
+                            scaleX: 1 - amplitude,
+                            scaleY: 1 - amplitude
+                        });
+    
+                    animator.delay?.(
+                        node.animationDelay || 0
+                    );
+    
+                    animator.start(
+                        "sinusoidalInOut"
+                    );
+    
+                    state.animatedElements.push(
+                        element
+                    );
+                }
+            );
+        });
     }
 
     function buildConstellationData() {
         const groups = getFilteredGroups();
-
-        const nodes = [];
+    
+        const coreNodes = [];
         const links = [];
-
+        const visualByNodeId = new Map();
+    
         const walletNodeId = "observed-wallet";
-
-        nodes.push({
+    
+        coreNodes.push({
             id: walletNodeId,
             name: shortAddress(
                 state.analysis.address
             ),
-
+    
             nodeType: "wallet",
             address: state.analysis.address,
-
+    
             x: 0,
             y: 0,
-
+    
+            anchorX: 0,
+            anchorY: 0,
+            collisionRadius: 31,
+    
             fixed: true,
             draggable: false,
-
+    
             symbol: STAR_SYMBOL,
             symbolSize: 47,
-
+    
             itemStyle: {
-                color: COLORS.core,
+                color: radialGradient([
+                    {offset: 0, color: "#ffffff"},
+                    {offset: 0.24, color: "#dfe4ff"},
+                    {offset: 0.6, color: COLORS.core},
+                    {
+                        offset: 1,
+                        color:
+                            colorWithAlpha(
+                                COLORS.core,
+                                0.25
+                            )
+                    }
+                ]),
+    
                 borderColor: "#ccd2ff",
-                borderWidth: 1,
-
-                shadowBlur: 34,
+                borderWidth: 1.2,
+    
+                shadowBlur: 38,
                 shadowColor:
-                    "rgba(143,154,255,.7)"
+                    "rgba(143,154,255,.78)"
             },
-
+    
             label: {
                 show: true,
                 position: "bottom",
                 distance: 14,
-
+    
                 color: COLORS.text,
                 fontFamily:
                     "Cascadia Code, Consolas, monospace",
-
+    
                 fontSize: 8,
                 fontWeight: 600
             }
         });
-
+    
         const goldenAngle =
             Math.PI * (3 - Math.sqrt(5));
-
+    
         groups.forEach((group, groupIndex) => {
-            const groupHash = hashCode(
-                group.key
-            );
-
+            const groupHash =
+                hashCode(group.key);
+    
             const jitter =
                 (
                     groupHash % 1000 /
                     1000 -
                     0.5
-                ) * 0.28;
-
+                ) * 0.34;
+    
             const angle =
                 groupIndex * goldenAngle +
                 jitter;
-
-            const ringIndex =
-                groupIndex % 4;
-
+    
+            const transactions =
+                [...group.filteredTransactions]
+                    .sort((first, second) => {
+                        return (
+                            getStellarProfile(second)
+                                .canonicalSize -
+                            getStellarProfile(first)
+                                .canonicalSize
+                        );
+                    });
+    
+            const maximumStarSize =
+                transactions.reduce(
+                    (maximum, transaction) =>
+                        Math.max(
+                            maximum,
+                            getRenderedStarSize(
+                                getStellarProfile(
+                                    transaction
+                                )
+                            )
+                        ),
+                    STELLAR.minSize
+                );
+    
+            const ringIndex = groupIndex % 5;
+    
             const distance =
-                320 +
-                ringIndex * 112 +
-                Math.floor(groupIndex / 12) * 45;
-
+                350 +
+                ringIndex * 148 +
+                Math.floor(groupIndex / 10) *
+                    74 +
+                Math.min(
+                    125,
+                    maximumStarSize * 0.9 +
+                        Math.sqrt(
+                            transactions.length
+                        ) * 16
+                );
+    
             const groupX =
                 Math.cos(angle) * distance;
-
+    
             const groupY =
                 Math.sin(angle) *
                 distance *
-                0.64;
-
-            const transactions =
-                group.filteredTransactions;
-
+                0.67;
+    
             const hasCluster =
                 transactions.length > 1;
-
-            let parentNodeId =
-                walletNodeId;
-
+    
+            const aggregateIntensity =
+                transactions.reduce(
+                    (maximum, transaction) =>
+                        Math.max(
+                            maximum,
+                            getStellarProfile(
+                                transaction
+                            ).intensity
+                        ),
+                    0
+                );
+    
+            let parentNodeId = walletNodeId;
+    
             if (hasCluster) {
                 const clusterNodeId =
                     `cluster:${group.key}`;
-
+    
                 const clusterColor =
                     getGroupDirectionColor(group);
-
-                nodes.push({
+    
+                const clusterSize = clamp(
+                    9 +
+                        Math.sqrt(
+                            transactions.length
+                        ) * 2.8 +
+                        aggregateIntensity * 3,
+                    10,
+                    23
+                );
+    
+                coreNodes.push({
                     id: clusterNodeId,
-
+    
                     name: shortAddress(
                         group.address,
                         6,
                         4
                     ),
-
+    
                     nodeType: "counterparty",
                     address: group.address,
-
+    
                     transactionCount:
                         transactions.length,
-
+    
                     latestTransactionHash:
                         transactions[0]?.hash ||
                         null,
-
+    
                     x: groupX,
                     y: groupY,
-
+    
+                    anchorX: groupX,
+                    anchorY: groupY,
+    
+                    collisionRadius:
+                        clusterSize / 2 + 5,
+    
                     draggable: true,
-
+    
                     symbol: "diamond",
-
-                    symbolSize: clamp(
-                        7 +
-                        Math.sqrt(
-                            transactions.length
-                        ) * 2.6,
-                        9,
-                        18
-                    ),
-
+                    symbolSize: clusterSize,
+    
                     itemStyle: {
-                        color: clusterColor,
+                        color: radialGradient([
+                            {
+                                offset: 0,
+                                color: "#ffffff"
+                            },
+                            {
+                                offset: 0.36,
+                                color: clusterColor
+                            },
+                            {
+                                offset: 1,
+                                color:
+                                    colorWithAlpha(
+                                        clusterColor,
+                                        0.38
+                                    )
+                            }
+                        ]),
+    
                         borderColor:
-                            "rgba(255,255,255,.3)",
-
-                        borderWidth: 0.7,
-                        shadowBlur: 12,
-                        shadowColor: clusterColor
+                            "rgba(255,255,255,.42)",
+    
+                        borderWidth: 0.9,
+    
+                        shadowBlur:
+                            12 +
+                            aggregateIntensity * 12,
+    
+                        shadowColor:
+                            colorWithAlpha(
+                                clusterColor,
+                                0.62
+                            )
                     },
-
+    
                     label: {
                         show: false
                     }
                 });
-
+    
                 links.push({
                     source: walletNodeId,
                     target: clusterNodeId,
-
+    
                     linkType: "cluster",
                     transactionCount:
                         transactions.length,
-
+    
                     lineStyle: {
                         color: clusterColor,
+    
                         width: clamp(
-                            0.5 +
-                            Math.sqrt(
-                                transactions.length
-                            ) * 0.22,
+                            0.65 +
+                                Math.sqrt(
+                                    transactions.length
+                                ) * 0.2 +
+                                aggregateIntensity * 2.6,
                             0.7,
-                            1.8
+                            4
                         ),
-
-                        opacity: 0.18,
+    
+                        opacity:
+                            0.15 +
+                            aggregateIntensity * 0.27,
+    
                         curveness:
-                            jitter * 0.08
+                            jitter * 0.09,
+    
+                        shadowBlur:
+                            aggregateIntensity > 0.76
+                                ? 8
+                                : 0,
+    
+                        shadowColor:
+                            colorWithAlpha(
+                                clusterColor,
+                                0.5
+                            )
                     }
                 });
-
-                parentNodeId =
-                    clusterNodeId;
+    
+                parentNodeId = clusterNodeId;
             }
-
-            transactions.forEach(
-                (transaction, transactionIndex) => {
+    
+            const positions =
+                layoutGroupTransactions(
+                    groupX,
+                    groupY,
+                    transactions,
+                    hasCluster,
+                    group.key
+                );
+    
+            positions.forEach(
+                (position, transactionIndex) => {
+                    const transaction =
+                        position.transaction;
+    
+                    const visual =
+                        position.visual;
+    
                     const transactionHash =
                         transaction.hash ||
                         `${group.key}-${transactionIndex}`;
-
+    
                     const transactionSeed =
                         hashCode(transactionHash);
-
-                    const localAngle =
-                        transactionIndex *
-                            goldenAngle +
-                        (
-                            transactionSeed % 360
-                        ) *
-                            Math.PI /
-                            180;
-
-                    const localDistance =
-                        hasCluster
-                            ? (
-                                27 +
-                                Math.sqrt(
-                                    transactionIndex + 1
-                                ) * 18 +
-                                transactionSeed % 17
-                            )
-                            : 0;
-
-                    const starX =
-                        groupX +
-                        Math.cos(localAngle) *
-                            localDistance;
-
-                    const starY =
-                        groupY +
-                        Math.sin(localAngle) *
-                            localDistance *
-                            0.72;
-
-                    const color =
-                        getTransactionColor(
-                            transaction
-                        );
-
+    
                     const starNodeId =
                         `transaction:${transactionHash}`;
-
-                    nodes.push({
+    
+                    const starNode = {
                         id: starNodeId,
-
+    
                         name: shortAddress(
                             transactionHash,
                             7,
                             5
                         ),
-
+    
                         nodeType: "transaction",
-
+    
                         transactionHash:
                             transaction.hash,
-
+    
                         transactionIndex,
-
+    
                         direction:
                             transaction.direction,
-
+    
                         method:
                             transaction.method,
-
-                        valueEth: weiToEth(
-                            transaction.valueWei
-                        ),
-
-                        x: starX,
-                        y: starY,
-
+    
+                        valueEth:
+                            visual.profile.valueEth,
+    
+                        valuePercentile:
+                            visual.profile.percentile,
+    
+                        valueIntensity:
+                            visual.profile.intensity,
+    
+                        stellarClass:
+                            visual.profile.stellarClass,
+    
+                        stellarLabel:
+                            visual.profile.label,
+    
+                        canonicalSize:
+                            visual.profile
+                                .canonicalSize,
+    
+                        x: position.x,
+                        y: position.y,
+    
+                        anchorX: position.x,
+                        anchorY: position.y,
+    
+                        collisionRadius:
+                            visual.size / 2,
+    
                         draggable: true,
-
-                        symbol: STAR_SYMBOL,
-                        symbolSize:
-                            getStarSize(transaction),
-
+                        cursor: "pointer",
+    
+                        symbol: visual.symbol,
+                        symbolSize: visual.size,
+    
                         itemStyle: {
-                            color,
-
+                            color: visual.fill,
+    
                             borderColor:
-                                transaction
-                                    .isContractInteraction
-                                    ? COLORS.contract
-                                    : "rgba(255,255,255,.35)",
-
+                                visual.semanticColor,
+    
                             borderWidth:
-                                transaction
-                                    .isContractInteraction
-                                    ? 1
-                                    : 0.45,
-
+                                visual.borderWidth,
+    
                             shadowBlur:
-                                transaction.status ===
-                                "failed"
-                                    ? 15
-                                    : 10,
-
-                            shadowColor: color
+                                visual.shadowBlur,
+    
+                            shadowColor:
+                                colorWithAlpha(
+                                    visual.accent,
+                                    0.7
+                                )
                         },
-
+    
                         label: {
                             show: false
+                        },
+    
+                        emphasis: {
+                            scale:
+                                visual.profile
+                                    .stellarClass ===
+                                "dust"
+                                    ? 2.15
+                                    : (
+                                        visual.profile
+                                            .stellarClass ===
+                                        "singularity"
+                                            ? 1.08
+                                            : 1.28
+                                    ),
+    
+                            itemStyle: {
+                                borderWidth:
+                                    visual.borderWidth +
+                                    1.1,
+    
+                                shadowBlur:
+                                    visual.shadowBlur +
+                                    20
+                            }
                         }
-                    });
-
+                    };
+    
+                    coreNodes.push(starNode);
+    
+                    visualByNodeId.set(
+                        starNodeId,
+                        visual
+                    );
+    
                     links.push({
                         source: parentNodeId,
                         target: starNodeId,
-
+    
                         linkType: "transaction",
                         transactionHash:
                             transaction.hash,
-
+    
                         direction:
                             transaction.direction,
-
+    
+                        valueEth:
+                            visual.profile.valueEth,
+    
+                        stellarClass:
+                            visual.profile.stellarClass,
+    
                         lineStyle: {
-                            color,
-                            width: 0.7,
-                            opacity: 0.38,
-
+                            color:
+                                visual.semanticColor,
+    
+                            width:
+                                visual.linkWidth,
+    
+                            opacity:
+                                visual.linkOpacity,
+    
                             curveness:
                                 (
                                     transactionSeed %
-                                    11 -
-                                    5
-                                ) *
-                                0.006,
-
+                                    17 -
+                                    8
+                                ) * 0.008,
+    
                             type:
                                 transaction.status ===
                                 "failed"
                                     ? "dashed"
-                                    : "solid"
+                                    : "solid",
+    
+                            shadowBlur:
+                                visual.profile
+                                    .intensity > 0.68
+                                    ? (
+                                        3 +
+                                        visual.profile
+                                            .intensity * 11
+                                    )
+                                    : 0,
+    
+                            shadowColor:
+                                colorWithAlpha(
+                                    visual.accent,
+                                    0.55
+                                )
                         }
                     });
                 }
             );
         });
-
+    
+        resolveNodeCollisions(coreNodes);
+    
+        const nodes = [];
+    
+        coreNodes.forEach((node) => {
+            if (
+                node.nodeType ===
+                "transaction"
+            ) {
+                const visual =
+                    visualByNodeId.get(node.id);
+    
+                if (visual) {
+                    nodes.push(
+                        ...createHaloNodes(
+                            node,
+                            visual
+                        )
+                    );
+                }
+            }
+    
+            nodes.push(node);
+        });
+    
+        state.nodeIndexByHash.clear();
+    
+        nodes.forEach((node, index) => {
+            if (
+                node.nodeType ===
+                    "transaction" &&
+                node.transactionHash
+            ) {
+                state.nodeIndexByHash.set(
+                    node.transactionHash,
+                    index
+                );
+            }
+        });
+    
         return {
             nodes,
             links,
             groupCount: groups.length,
+    
             transactionCount:
-                nodes.filter(
+                coreNodes.filter(
                     (node) =>
                         node.nodeType ===
                         "transaction"
@@ -852,6 +1956,10 @@
         if (
             parameters.dataType === "edge"
         ) {
+            return "";
+        }
+
+        if (data.nodeType === "halo") {
             return "";
         }
 
@@ -976,6 +2084,27 @@
                     font-size:8px
                 ">
                     ${escapeHtml(
+                        data.stellarLabel ||
+                        "VALUE STAR"
+                    )}
+                    · VALUE MAGNITUDE
+                    ${Math.round(
+                        clamp(
+                            data.valuePercentile || 0,
+                            0,
+                            1
+                        ) * 100
+                    )} / 100
+                </span>
+
+                <span style="
+                    display:block;
+                    margin-top:5px;
+                    color:#9aa4b5;
+                    font-family:monospace;
+                    font-size:8px
+                ">
+                    ${escapeHtml(
                         transaction.method
                     )}
                     ·
@@ -990,8 +2119,13 @@
     }
 
     function renderConstellation() {
+        stopStellarAnimations();
+
         const graphData =
             buildConstellationData();
+
+        state.responsiveMaxSize =
+            getMaximumRenderedStarSize();
 
         state.graphChart.setOption(
             {
@@ -1043,11 +2177,22 @@
 
                         roam: true,
                         draggable: true,
+                        cursor: "grab",
 
                         scaleLimit: {
-                            min: 0.45,
-                            max: 6
+                            min: 0.42,
+                            max: 7
                         },
+
+                        edgeSymbol: [
+                            "none",
+                            "circle"
+                        ],
+
+                        edgeSymbolSize: [
+                            0,
+                            2.8
+                        ],
 
                         lineStyle: {
                             opacity: 0.3,
@@ -1064,6 +2209,7 @@
 
                         emphasis: {
                             focus: "adjacency",
+                            scale: 1.18,
 
                             label: {
                                 show: true,
@@ -1106,6 +2252,7 @@
         );
 
         updateFieldInformation(graphData);
+        startStellarAnimations(graphData);
 
         return graphData;
     }
@@ -1605,69 +2752,137 @@
             document.getElementById(
                 "transaction-stream"
             );
-
+    
         if (!stream) {
             return;
         }
-
+    
         stream.replaceChildren();
-
+    
         state.analysis.transactions
             .slice(0, 8)
             .forEach((transaction) => {
                 const item =
                     document.createElement("li");
-
+    
                 const direction =
                     document.createElement("span");
-
+    
                 direction.className =
                     `stream-direction is-${transaction.direction}`;
-
+    
                 direction.textContent =
                     transaction.direction.toUpperCase();
-
+    
                 const address =
                     document.createElement("span");
-
+    
                 address.className =
                     "stream-address";
-
+    
                 address.textContent =
                     shortAddress(
                         transaction.counterparty,
                         7,
                         5
                     );
-
+    
                 const value =
                     document.createElement("span");
-
+    
                 value.className =
                     "stream-value";
-
+    
                 value.textContent =
                     formatEth(
                         weiToEth(
                             transaction.valueWei
                         )
                     );
-
+    
+                item.dataset.transactionHash =
+                    transaction.hash || "";
+    
+                item.tabIndex = 0;
+                item.setAttribute("role", "button");
+    
+                item.setAttribute(
+                    "aria-label",
+                    `${transaction.direction} transaction, ${value.textContent}, open details`
+                );
+    
                 item.append(
                     direction,
                     address,
                     value
                 );
-
-                item.addEventListener(
-                    "click",
-                    () => {
-                        showTransactionInspector(
-                            transaction
+    
+                const focusStar = () => {
+                    if (transaction.hash) {
+                        highlightTransactionNode(
+                            transaction.hash,
+                            true
                         );
                     }
+                };
+    
+                const releaseStar = () => {
+                    if (transaction.hash) {
+                        highlightTransactionNode(
+                            transaction.hash,
+                            false
+                        );
+                    }
+                };
+    
+                const openTransaction = () => {
+                    showTransactionInspector(
+                        transaction
+                    );
+    
+                    focusStar();
+                };
+    
+                item.addEventListener(
+                    "mouseenter",
+                    focusStar
                 );
-
+    
+                item.addEventListener(
+                    "mouseleave",
+                    releaseStar
+                );
+    
+                item.addEventListener(
+                    "focus",
+                    focusStar
+                );
+    
+                item.addEventListener(
+                    "blur",
+                    releaseStar
+                );
+    
+                item.addEventListener(
+                    "click",
+                    openTransaction
+                );
+    
+                item.addEventListener(
+                    "keydown",
+                    (event) => {
+                        if (
+                            event.key !== "Enter" &&
+                            event.key !== " "
+                        ) {
+                            return;
+                        }
+    
+                        event.preventDefault();
+                        openTransaction();
+                    }
+                );
+    
                 stream.append(item);
             });
     }
@@ -1812,6 +3027,101 @@
         );
     }
 
+    function setStreamTransactionFocus(
+        transactionHash,
+        focused
+    ) {
+        document
+            .querySelectorAll(
+                "#transaction-stream li[data-transaction-hash]"
+            )
+            .forEach((item) => {
+                if (
+                    item.dataset.transactionHash !==
+                    transactionHash
+                ) {
+                    return;
+                }
+    
+                item.style.transition =
+                    "opacity 160ms ease, " +
+                    "transform 160ms ease, " +
+                    "background-color 160ms ease";
+    
+                item.style.opacity =
+                    focused ? "1" : "";
+    
+                item.style.transform =
+                    focused
+                        ? "translateX(-3px)"
+                        : "";
+    
+                item.style.backgroundColor =
+                    focused
+                        ? "rgba(143,154,255,.08)"
+                        : "";
+            });
+    }
+
+    function highlightTransactionNode(
+        transactionHash,
+        highlighted
+    ) {
+        const dataIndex =
+            state.nodeIndexByHash.get(
+                transactionHash
+            );
+    
+        if (
+            dataIndex === undefined ||
+            !state.graphChart
+        ) {
+            return;
+        }
+    
+        state.graphChart.dispatchAction({
+            type:
+                highlighted
+                    ? "highlight"
+                    : "downplay",
+    
+            seriesIndex: 0,
+            dataIndex
+        });
+    }
+
+    function handleGraphMouseOver(parameters) {
+        const data = parameters.data;
+    
+        if (
+            parameters.dataType !== "node" ||
+            data?.nodeType !== "transaction"
+        ) {
+            return;
+        }
+    
+        setStreamTransactionFocus(
+            data.transactionHash,
+            true
+        );
+    }
+
+    function handleGraphMouseOut(parameters) {
+        const data = parameters.data;
+    
+        if (
+            parameters.dataType !== "node" ||
+            data?.nodeType !== "transaction"
+        ) {
+            return;
+        }
+    
+        setStreamTransactionFocus(
+            data.transactionHash,
+            false
+        );
+    }
+
     function handleGraphClick(parameters) {
         const data = parameters.data;
 
@@ -1881,6 +3191,24 @@
                 "click",
                 handleGraphClick
             );
+
+            state.graphChart.on(
+                "mouseover",
+                handleGraphMouseOver
+            );
+
+            state.graphChart.on(
+                "mouseout",
+                handleGraphMouseOut
+            );
+
+            state.graphChart
+                .getZr()
+                .on("click", (event) => {
+                    if (!event.target) {
+                        closeTransactionInspector();
+                    }
+                });
         }
 
         if (!state.directionChart) {
@@ -2018,6 +3346,18 @@
         state.graphChart?.resize();
         state.directionChart?.resize();
         state.activityChart?.resize();
+
+        const nextMaximumSize =
+            getMaximumRenderedStarSize();
+
+        if (
+            state.model &&
+            state.responsiveMaxSize !== null &&
+            nextMaximumSize !==
+                state.responsiveMaxSize
+        ) {
+            renderConstellation();
+        }
     }
 
     function onSelection(handler) {
@@ -2032,6 +3372,8 @@
     }
 
     function dispose() {
+        stopStellarAnimations();
+
         state.graphChart?.dispose();
         state.directionChart?.dispose();
         state.activityChart?.dispose();
@@ -2044,6 +3386,11 @@
         state.model = null;
 
         state.transactionByHash.clear();
+        state.nodeIndexByHash.clear();
+        state.stellarByTransaction =
+            new WeakMap();
+
+        state.responsiveMaxSize = null;
 
         closeTransactionInspector();
     }
