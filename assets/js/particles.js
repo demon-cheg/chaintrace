@@ -20,7 +20,7 @@
         "(prefers-reduced-motion: reduce)"
     );
 
-    const FRAME_INTERVAL = 1000 / 30;
+    const FRAME_INTERVAL = 1000 / 120;
     const MAX_DPR = 1.5;
 
     const state = {
